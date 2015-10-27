@@ -9,7 +9,7 @@ require 'optim'
 require 'lfs'
 require 'util.Squeeze'
 require 'util.misc'
-
+require 'cudnn'
 BatchLoader = require 'util.BatchLoaderUnk'
 model_utils = require 'util.model_utils'
 
@@ -77,13 +77,13 @@ function get_layer(layer)
 	    highway = layer
 	end
     end
-end 
+end
 protos.rnn:apply(get_layer)
 
 -- get conv filter layers
 if cnn ~= nil then
    conv_filters = {}
-   cnn:apply(function (x) if x.name ~= nil then if x.name:sub(1,4)=='conv' then 
+   cnn:apply(function (x) if x.name ~= nil then if x.name:sub(1,4)=='conv' then
 			     table.insert(conv_filters, x) end end end)
 end
 -- for each word get the feature map values as well
@@ -110,7 +110,7 @@ function get_max_chargrams()
     	    local chargrams = {}
 	    for k = 1, max_arg:size(2) do
 	        local c = {}
-	        local start_char = max_arg[j][k] 
+	        local start_char = max_arg[j][k]
 		local end_char = max_arg[j][k] + width - 1
 		for l = start_char, end_char do
 		    table.insert(c, idx2char[char_idx_all[j][l]])
@@ -131,7 +131,7 @@ function print_max_chargrams()
 	local max_val, max_arg = torch.max(v[1],1)
 	max_val = max_val:squeeze()
 	max_arg = max_arg:squeeze()
-	for i = 1, max_arg:size(1) do 
+	for i = 1, max_arg:size(1) do
 	    local chargram = v[2][max_arg[i]][i]
 	    local word = idx2word[max_arg[i]]
 	    max_chargrams[#max_chargrams + 1] = {u, chargram, word, max_val[i]}
@@ -156,14 +156,14 @@ function get_all_chargrams(idx2word)
 	    if count[ngram] == nil then
 	        count[ngram] = 1
 	    else
-	        count[ngram] = count[ngram] + 1	     
+	        count[ngram] = count[ngram] + 1
 	    end
 	end
     end
     for ngram, c in pairs(count) do
         if c > 3 then
 	    idx2chargram[#idx2chargram + 1] = ngram
-	    chargram2idx[ngram] = #idx2chargram	    
+	    chargram2idx[ngram] = #idx2chargram
 	end
     end
     return idx2chargram, chargram2idx
@@ -230,7 +230,7 @@ function get_contribution()
 	        local c = {}
 		local start_char = max_arg[j][k]
 		local end_char = max_arg[j][k] + width - 1
-		for l = start_char, end_char do	
+		for l = start_char, end_char do
 		    result[j][l] = result[j][l] + 1
 		    table.insert(c, idx2char[char_idx_all[j][l]])
 		end
@@ -262,7 +262,7 @@ function get_nn(words, k)
     else
         word_vecs_trained = word_vecs.weight
     end
-    -- normalize 
+    -- normalize
     word_vecs_trained = word_vecs_trained:float()
     word_vecs_trained = normalize(word_vecs_trained)
     for i = 1, #words do
@@ -282,16 +282,16 @@ function get_nn(words, k)
         else
 	    new_word = word_vecs_trained[word2idx[word]]
 	end
-        r = get_sim_words(word_vecs_trained, new_word, k)	
+        r = get_sim_words(word_vecs_trained, new_word, k)
         print('----'..word..'----')
     	for j = 1, k do
 	    print(string.format('%s, %.4f', r[j][1], r[j][2]))
 	end
-    end       
+    end
 end
 
 function normalize(m)
-    local m_norm = torch.zeros(m:size())    
+    local m_norm = torch.zeros(m:size())
     for i = 1, m:size(1) do
         m_norm[i] = m[i] / torch.norm(m[i])
     end
