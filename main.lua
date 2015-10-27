@@ -25,19 +25,22 @@ cmd:text()
 cmd:text('Train a word+character-level language model')
 cmd:text()
 cmd:text('Options')
+-- task
+cmd:option('-task','copy','copy, lm')
+cmd:option('-corrupt',6,'corrupt input sequence of characters or not?')
 -- data
 cmd:option('-data_dir','data/ru','data directory. Should contain train.txt/valid.txt/test.txt with input data')
 -- model params
-cmd:option('-rnn_size', 650, 'size of LSTM internal state')
+cmd:option('-rnn_size', 1024, 'size of LSTM internal state')
 cmd:option('-use_words', 0, 'use words (1=yes)')
 cmd:option('-use_chars', 1, 'use characters (1=yes)')
 cmd:option('-highway_layers', 2, 'number of highway layers')
 cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
-cmd:option('-char_vec_size', 15, 'dimensionality of character embeddings')
+cmd:option('-char_vec_size', 64, 'dimensionality of character embeddings')
 cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
 cmd:option('-kernels', '{1,2,3,4,5,6,7}', 'conv net kernel widths')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
-cmd:option('-dropout',0.5,'dropout. 0 = no dropout')
+cmd:option('-dropout',0,'dropout. 0 = no dropout')
 -- optimization
 cmd:option('-hsm',0,'number of clusters to use for hsm. 0 = normal softmax, -1 = use sqrt(|V|)')
 cmd:option('-learning_rate',0.001,'starting learning rate')
@@ -45,8 +48,8 @@ cmd:option('-learning_rate_decay',0.5,'learning rate decay')
 cmd:option('-decay_when',1,'decay if validation perplexity does not improve by more than this much')
 cmd:option('-param_init', 0.05, 'initialize parameters at')
 cmd:option('-batch_norm', 0, 'use batch normalization over input embeddings (1=yes)')
-cmd:option('-seq_length',35,'number of timesteps to unroll for')
-cmd:option('-batch_size',64,'number of sequences to train on in parallel')
+cmd:option('-seq_length',10,'number of timesteps to unroll for')
+cmd:option('-batch_size',128,'number of sequences to train on in parallel')
 cmd:option('-max_epochs',255,'number of full passes through the training data')
 cmd:option('-max_grad_norm',5,'normalize gradients at')
 cmd:option('-max_word_l',50,'maximum word length')
@@ -105,11 +108,10 @@ if opt.cudnn == 1 then
 end
 
 -- create the data loader class
-loader = BatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, opt.padding, opt.max_word_l)
+loader = BatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, opt.padding, opt.max_word_l,opt.task)
 print('Word vocab size: ' .. #loader.idx2word .. ', Char vocab size: ' .. #loader.idx2char
 			.. ', Max word length (incl. padding): ', loader.max_word_l)
 opt.max_word_l = loader.max_word_l
-print(loader.idx2char)
 -- if number of clusters is not explicitly provided
 if opt.hsm == -1 then
 		opt.hsm = torch.round(torch.sqrt(#loader.idx2word))
@@ -202,10 +204,6 @@ else
 		print('number of parameters in the model: ' .. params:nElement())
 end
 
--- initialization
-if not retrain then
-	 params:uniform(-opt.param_init, opt.param_init) -- small numbers uniform if starting from scratch
-end
 
 
 local word_vecs, char_vecs, cnn, highway
@@ -226,13 +224,17 @@ function get_layer(layer)
 end
 protos.rnn:apply(get_layer)
 
-for layer_idx = 1, opt.highway_layers do
-		for _,node in ipairs(highway.forwardnodes) do
-				if node.data.annotations.name == "tg_" .. layer_idx then
-						print('setting biases to -2 in transfer gate layer ' .. layer_idx)
-						node.data.module.bias:fill(-2.0)
-				end
-		end
+-- initialization
+if not retrain then
+	params:uniform(-opt.param_init, opt.param_init) -- small numbers uniform if starting from scratch
+	for layer_idx = 1, opt.highway_layers do
+			for _,node in ipairs(highway.forwardnodes) do
+					if node.data.annotations.name == "tg_" .. layer_idx then
+							print('setting biases to -2 in transfer gate layer ' .. layer_idx)
+							node.data.module.bias:fill(-2.0)
+					end
+			end
+	end
 end
 
 -- make a bunch of clones after flattening, as that reallocates memory
@@ -246,8 +248,8 @@ end
 -- for easy switch between using words/chars (or both)
 function get_input(x, x_char, t, prev_states)
 		local u = {}
-		if opt.use_chars == 1 then table.insert(u, x_char[{{},t}]) end
-		if opt.use_words == 1 then table.insert(u, x[{{},t}]) end
+		if opt.use_chars == 1 then table.insert(u, x_char[t]) end
+		if opt.use_words == 1 then table.insert(u, x[t]) end
 		for i = 1, #prev_states do table.insert(u, prev_states[i]) end
 		return u
 end
@@ -271,9 +273,9 @@ function eval_split(split_idx, max_batches)
 			local x, y, x_char = loader:next_batch(split_idx)
 			if opt.gpuid >= 0 then -- ship the input arrays to GPU
 				-- have to convert to float because integers can't be cuda()'d
-				x = x:float():cuda()
-				y = y:float():cuda()
-				x_char = x_char:float():cuda()
+				x = x:t():float():cuda()
+				y = y:t():float():cuda()
+				x_char = x_char:transpose(1,2):float():cuda()
 			end
 			-- forward pass
 			for t=1,opt.seq_length do
@@ -284,7 +286,7 @@ function eval_split(split_idx, max_batches)
 					table.insert(rnn_state[t], lst[i])
 				end
 				prediction = lst[#lst]
-								loss = loss + clones.criterion[t]:forward(prediction, y[{{}, t}])
+								loss = loss + clones.criterion[t]:forward(prediction, y[t])
 			end
 			-- carry over lstm state
 			rnn_state[0] = rnn_state[#rnn_state]
@@ -294,9 +296,9 @@ function eval_split(split_idx, max_batches)
 		local x, y, x_char = loader:next_batch(split_idx)
 		if opt.gpuid >= 0 then -- ship the input arrays to GPU
 			-- have to convert to float because integers can't be cuda()'d
-			x = x:float():cuda()
-			y = y:float():cuda()
-			x_char = x_char:float():cuda()
+			x = x:t():float():cuda()
+			y = y:t():float():cuda()
+			x_char = x_char:transpose(1,2):float():cuda()
 		end
 		protos.rnn:evaluate() -- just need one clone
 		for t = 1, x:size(2) do
@@ -304,7 +306,7 @@ function eval_split(split_idx, max_batches)
 			rnn_state[0] = {}
 			for i=1,#init_state do table.insert(rnn_state[0], lst[i]) end
 			prediction = lst[#lst]
-			local tok_perp = protos.criterion:forward(prediction, y[{{},t}])
+			local tok_perp = protos.criterion:forward(prediction, y[t])
 			loss = loss + tok_perp
 		end
 		loss = loss / x:size(2)
@@ -314,7 +316,7 @@ end
 
 -- do fwd/bwd and return loss, grad_params
 local init_state_global = clone_list(init_state)
-
+local iteration
 function feval(x)
 		if x ~= params then
 				params:copy(x)
@@ -327,14 +329,43 @@ function feval(x)
 		local x, y, x_char = loader:next_batch(1) --from train
 		if opt.gpuid >= 0 then -- ship the input arrays to GPU
 			-- have to convert to float because integers can't be cuda()'d
-			x = x:float():cuda()
-			y = y:float():cuda()
-			x_char = x_char:float():cuda()
+			x = x:t():float():cuda()
+			y = y:t():float():cuda()
+			x_char = x_char:transpose(1,2):float():cuda()
 		end
 		------------------- forward pass -------------------
 		local rnn_state = {[0] = init_state_global}
 		local predictions = {}					 -- softmax outputs
 		local loss = 0
+
+-- CORRUPT!!!!!!
+			if opt.corrupt > 0 then
+				for c = 1, opt.corrupt do
+					for b = 1, opt.batch_size do
+						--choose place to corrupt
+						local pos = torch.random(1,opt.seq_length)
+						-- choose random symbol to substitute
+						local ch = torch.random(1,#loader.idx2char)
+						local word = x_char[pos][b]
+						-- find word length
+						local max = 1
+						for w = 2, x_char:size(3) do
+							if word[w] ~= 1 then
+								max = w
+							end
+						end
+						if max > 4 then
+							--choose place within word to corrupt
+							local wpos = torch.random(2,max-1)
+							-- make damage
+							x_char[pos][b][wpos] = ch
+						end
+					end
+				end
+			end
+		local text = ""
+		local decoded = ""
+		local input = ""
 		for t=1,opt.seq_length do
 			clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)
 			local lst = clones.rnn[t]:forward(get_input(x, x_char, t, rnn_state[t-1]))
@@ -343,7 +374,27 @@ function feval(x)
 					table.insert(rnn_state[t], lst[i])
 			end -- extract the state, without output
 			predictions[t] = lst[#lst] -- last element is the prediction
-			loss = loss + clones.criterion[t]:forward(predictions[t], y[{{}, t}])
+			loss = loss + clones.criterion[t]:forward(predictions[t], y[t])
+			-- introspect
+			if iteration % 10 == 0 then
+				local loss, index = torch.max(predictions[t][1],1)
+				decoded = decoded .. " " .. loader.idx2word[index[1]]
+				text = text .. " " .. loader.idx2word[y[t][1]]
+				input = input .. " "
+				for ch = 2, x_char[t]:size(2) do
+					local char = loader.idx2char[x_char[t][1][ch]]
+					if char ~= ' ' and char~= '}' then
+						input = input .. loader.idx2char[x_char[t][1][ch]]
+					else
+						break
+					end
+				end
+			end
+		end
+		if iteration % 10 == 0 then
+			print("input  ->",input)
+			print("true   ->",text)
+			print("decoded<-",decoded)
 		end
 		loss = loss / opt.seq_length
 		------------------ backward pass -------------------
@@ -351,7 +402,7 @@ function feval(x)
 		local drnn_state = {[opt.seq_length] = clone_list(init_state, true)} -- true also zeros the clones
 		for t=opt.seq_length,1,-1 do
 				-- backprop through loss, and softmax/linear
-				local doutput_t = clones.criterion[t]:backward(predictions[t], y[{{}, t}])
+				local doutput_t = clones.criterion[t]:backward(predictions[t], y[t])
 				table.insert(drnn_state[t], doutput_t)
 				table.insert(rnn_state[t-1], drnn_state[t])
 				local dlst = clones.rnn[t]:backward(get_input(x, x_char, t, rnn_state[t-1]), drnn_state[t])
@@ -401,6 +452,7 @@ local optim_state = {learningRate = opt.learning_rate , alpha = 0.95}
 local iterations = opt.max_epochs * loader.split_sizes[1]
 if char_vecs ~= nil then char_vecs.weight[1]:zero() end -- zero-padding vector is always zero
 for i = 1, iterations do
+	iteration = i
 		local epoch = i / loader.split_sizes[1]
 
 		local timer = torch.Timer()
@@ -422,6 +474,8 @@ for i = 1, iterations do
 				val_losses[#val_losses+1] = val_loss
 				local savefile = string.format('%s/lm_%s_epoch%.2f_%.2f.t7', opt.checkpoint_dir, opt.savefile, epoch, val_loss)
 				local checkpoint = {}
+				checkpoint.corrupt = opt.corrupt
+				checkpoint.task = opt.task
 				checkpoint.protos = protos
 				checkpoint.opt = opt
 				checkpoint.train_losses = train_losses

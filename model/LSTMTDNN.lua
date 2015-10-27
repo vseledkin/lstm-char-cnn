@@ -52,23 +52,23 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 	local prev_c = inputs[L*2+use_words+use_chars-1]
 	-- the input to this layer
 	if L == 1 then
-			if use_chars == 1 then
-		char_vec = char_vec_layer(inputs[1])
-		local char_cnn = TDNN.tdnn(length, char_vec_size, feature_maps, kernels)
-		char_cnn.name = 'cnn' -- change name so we can refer to it later
-		local cnn_output = char_cnn(char_vec)
-		input_size_L = torch.Tensor(feature_maps):sum()
-					if use_words == 1 then
+		if use_chars == 1 then
+			char_vec = char_vec_layer(inputs[1])
+			local char_cnn = TDNN.tdnn(length, char_vec_size, feature_maps, kernels)
+			char_cnn.name = 'cnn' -- change name so we can refer to it later
+			local cnn_output = char_cnn(char_vec)
+			input_size_L = torch.Tensor(feature_maps):sum()
+			if use_words == 1 then
 				word_vec = word_vec_layer(inputs[2])
 				x = nn.JoinTable(2)({cnn_output, word_vec})
 				input_size_L = input_size_L + word_vec_size
-		else
+			else
 				x = nn.Identity()(cnn_output)
-		end
-			else -- word_vecs only
-					x = word_vec_layer(inputs[1])
-		input_size_L = word_vec_size
 			end
+		else -- word_vecs only
+			x = word_vec_layer(inputs[1])
+			input_size_L = word_vec_size
+		end
 			if batch_norm == 1 then
 					x = nn.BatchNormalization(0)(x)
 			end

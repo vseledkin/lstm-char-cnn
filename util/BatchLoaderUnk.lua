@@ -6,7 +6,7 @@ local BatchLoaderUnk = {}
 local stringx = require('pl.stringx')
 BatchLoaderUnk.__index = BatchLoaderUnk
 
-function BatchLoaderUnk.create(data_dir, batch_size, seq_length, padding, max_word_l)
+function BatchLoaderUnk.create(data_dir, batch_size, seq_length, padding, max_word_l,task)
     local self = {}
     setmetatable(self, BatchLoaderUnk)
 
@@ -48,8 +48,14 @@ function BatchLoaderUnk.create(data_dir, batch_size, seq_length, padding, max_wo
           data = data:sub(1, batch_size * seq_length * math.floor(len / (batch_size * seq_length)))
        end
        local ydata = data:clone()
-       ydata:sub(1,-2):copy(data:sub(2,-1))
-       ydata[-1] = data[1]
+			 print(string.format("Maintaining data for [%s] task",task))
+			 if task == "lm" then -- do nothing if task is copy
+				 -- two lines of code below shifting y over x to one position right
+	       ydata:sub(1,-2):copy(data:sub(2,-1))
+	       ydata[-1] = data[1]
+			 end
+			 --print("x=",data[{{1000,1030}}])
+			 --print("y=",ydata[{{1000,1030}}])
        local data_char = torch.zeros(data:size(1), self.max_word_l):long()
        for i = 1, data:size(1) do
           data_char[i] = self:expand(all_data_char[split][i]:totable())
