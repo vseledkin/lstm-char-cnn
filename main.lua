@@ -31,25 +31,25 @@ cmd:option('-corrupt',8,'corrupt input sequence of characters or not?')
 -- data
 cmd:option('-data_dir','data/ru','data directory. Should contain train.txt/valid.txt/test.txt with input data')
 -- model params
-cmd:option('-rnn_size', 1024, 'size of LSTM internal state')
+cmd:option('-rnn_size', 128, 'size of LSTM internal state')
 cmd:option('-use_words', 0, 'use words (1=yes)')
 cmd:option('-use_chars', 1, 'use characters (1=yes)')
 cmd:option('-highway_layers', 0, 'number of highway layers')
 cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
-cmd:option('-char_vec_size', 512, 'dimensionality of character embeddings')
+cmd:option('-char_vec_size', 64, 'dimensionality of character embeddings')
 cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
 cmd:option('-kernels', '{1,2,3,4,5,6,7}', 'conv net kernel widths')
-cmd:option('-num_layers', 2, 'number of layers in the LSTM')
+cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-dropout',0,'dropout. 0 = no dropout')
 -- optimization
-cmd:option('-hsm',0,'number of clusters to use for hsm. 0 = normal softmax, -1 = use sqrt(|V|)')
+cmd:option('-hsm',-1,'number of clusters to use for hsm. 0 = normal softmax, -1 = use sqrt(|V|)')
 cmd:option('-learning_rate',0.001,'starting learning rate')
 cmd:option('-learning_rate_decay',0.5,'learning rate decay')
 cmd:option('-decay_when',1,'decay if validation perplexity does not improve by more than this much')
 cmd:option('-param_init', 0.05, 'initialize parameters at')
 cmd:option('-batch_norm', 0, 'use batch normalization over input embeddings (1=yes)')
 cmd:option('-seq_length',10,'number of timesteps to unroll for')
-cmd:option('-batch_size',128,'number of sequences to train on in parallel')
+cmd:option('-batch_size',32,'number of sequences to train on in parallel')
 cmd:option('-max_epochs',255,'number of full passes through the training data')
 cmd:option('-max_grad_norm',5,'normalize gradients at')
 cmd:option('-max_word_l',50,'maximum word length')
@@ -57,7 +57,7 @@ cmd:option('-threads', 16, 'number of threads')
 -- bookkeeping
 cmd:option('-seed',3435,'torch manual random number generator seed')
 cmd:option('-print_every',1,'how many steps/minibatches between printing out the loss')
-cmd:option('-save_every', 1, 'save every n epochs')
+cmd:option('-save_every', 0.1, 'save every n epochs')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','char','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-checkpoint', 'checkpoint.t7', 'start from a checkpoint if a valid checkpoint.t7 file is given')
@@ -194,15 +194,14 @@ if opt.gpuid >= 0 then
 end
 
 -- put the above things into one flattened parameters tensor
-params, grad_params = model_utils.combine_all_parameters(protos.rnn)
 -- hsm has its own params
+print("HSM: "..opt.hsm)
 if opt.hsm > 0 then
-		hsm_params, hsm_grad_params = protos.criterion:getParameters()
-		hsm_params:uniform(-opt.param_init, opt.param_init)
-		print('number of parameters in the model: ' .. params:nElement() + hsm_params:nElement())
+	params, grad_params = model_utils.combine_all_parameters(protos.rnn, protos.criterion)
 else
-		print('number of parameters in the model: ' .. params:nElement())
+	params, grad_params = model_utils.combine_all_parameters(protos.rnn)
 end
+print('number of parameters in the model: ' .. params:nElement())
 
 
 
@@ -286,7 +285,7 @@ function eval_split(split_idx, max_batches)
 					table.insert(rnn_state[t], lst[i])
 				end
 				prediction = lst[#lst]
-								loss = loss + clones.criterion[t]:forward(prediction, y[t])
+				loss = loss + clones.criterion[t]:forward(prediction, y[t])
 			end
 			-- carry over lstm state
 			rnn_state[0] = rnn_state[#rnn_state]
@@ -322,9 +321,6 @@ function feval(x)
 				params:copy(x)
 		end
 		grad_params:zero()
-		if opt.hsm > 0 then
-				hsm_grad_params:zero()
-		end
 		------------------ get minibatch -------------------
 		local x, y, x_char = loader:next_batch(1) --from train
 		if opt.gpuid >= 0 then -- ship the input arrays to GPU
