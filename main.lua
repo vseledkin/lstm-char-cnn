@@ -31,14 +31,14 @@ cmd:option('-corrupt',8,'corrupt input sequence of characters or not?')
 -- data
 cmd:option('-data_dir','data/ru','data directory. Should contain train.txt/valid.txt/test.txt with input data')
 -- model params
-cmd:option('-rnn_size', 128, 'size of LSTM internal state')
+cmd:option('-rnn_size', 256, 'size of LSTM internal state')
 cmd:option('-use_words', 0, 'use words (1=yes)')
 cmd:option('-use_chars', 1, 'use characters (1=yes)')
 cmd:option('-highway_layers', 0, 'number of highway layers')
-cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
-cmd:option('-char_vec_size', 64, 'dimensionality of character embeddings')
-cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
-cmd:option('-kernels', '{1,2,3,4,5,6,7}', 'conv net kernel widths')
+cmd:option('-word_vec_size', 0, 'dimensionality of word embeddings')
+cmd:option('-char_vec_size', 16, 'dimensionality of character embeddings')
+cmd:option('-feature_maps', '{50,100,150,200,250,300}', 'number of feature maps in the CNN')
+cmd:option('-kernels', '{1,2,3,4,5,6}', 'conv net kernel widths')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-dropout',0,'dropout. 0 = no dropout')
 -- optimization
@@ -48,16 +48,16 @@ cmd:option('-learning_rate_decay',0.5,'learning rate decay')
 cmd:option('-decay_when',1,'decay if validation perplexity does not improve by more than this much')
 cmd:option('-param_init', 0.05, 'initialize parameters at')
 cmd:option('-batch_norm', 0, 'use batch normalization over input embeddings (1=yes)')
-cmd:option('-seq_length',10,'number of timesteps to unroll for')
-cmd:option('-batch_size',32,'number of sequences to train on in parallel')
+cmd:option('-seq_length',20,'number of timesteps to unroll for')
+cmd:option('-batch_size',128,'number of sequences to train on in parallel')
 cmd:option('-max_epochs',255,'number of full passes through the training data')
 cmd:option('-max_grad_norm',5,'normalize gradients at')
-cmd:option('-max_word_l',50,'maximum word length')
+cmd:option('-max_word_l',25,'maximum word length')
 cmd:option('-threads', 16, 'number of threads')
 -- bookkeeping
 cmd:option('-seed',3435,'torch manual random number generator seed')
 cmd:option('-print_every',1,'how many steps/minibatches between printing out the loss')
-cmd:option('-save_every', 0.1, 'save every n epochs')
+cmd:option('-save_every', 1, 'save every n epochs')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','char','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-checkpoint', 'checkpoint.t7', 'start from a checkpoint if a valid checkpoint.t7 file is given')
@@ -123,6 +123,7 @@ if opt.hsm > 0 then
 		HSMClass = require 'util.HSMClass'
 		require 'util.HLogSoftMax'
 		mapping = torch.LongTensor(#loader.idx2word, 2):zero()
+		rmapping = {}
 		local n_in_each_cluster = #loader.idx2word / opt.hsm
 		local _, idx = torch.sort(torch.randn(#loader.idx2word), 1, true)
 		local n_in_cluster = {} --number of tokens in each cluster
@@ -136,12 +137,23 @@ if opt.hsm > 0 then
 				end
 				mapping[word_idx][1] = c
 				mapping[word_idx][2] = n_in_cluster[c]
+
 				if n_in_cluster[c] >= n_in_each_cluster then
 						c = c+1
 				end
 				if c > opt.hsm then --take care of some corner cases
 						c = opt.hsm
 				end
+		end
+		for i=1, idx:size(1) do
+			local cluster_id = mapping[i][1]
+			local class_id = mapping[i][2]
+			local cluster = rmapping[cluster_id]
+
+			if rmapping[cluster_id] == nil then
+				rmapping[cluster_id] = {}
+			end
+			rmapping[cluster_id][class_id] = i
 		end
 		print(string.format('using hierarchical softmax with %d classes', opt.hsm))
 end
@@ -316,6 +328,11 @@ end
 -- do fwd/bwd and return loss, grad_params
 local init_state_global = clone_list(init_state)
 local iteration
+
+function corrupt_word(w)
+
+end
+
 function feval(x)
 		if x ~= params then
 				params:copy(x)
@@ -371,20 +388,28 @@ function feval(x)
 			end -- extract the state, without output
 			predictions[t] = lst[#lst] -- last element is the prediction
 			loss = loss + clones.criterion[t]:forward(predictions[t], y[t])
-			-- introspect
+			-- introspect network predictions
 			if iteration % 10 == 0 then
-				local loss, index = torch.max(predictions[t][1],1)
-				decoded = decoded .. " " .. loader.idx2word[index[1]]
+				if opt.hsm > 0 then
+					local cluster_loss, cluster_id = torch.max(clones.criterion[t].cluster_prediction.output[1],1)
+					local class_loss, class_id = torch.max(clones.criterion[t].class_prediction.output[1],1)
+					local word_id = rmapping[cluster_id[1]][class_id[1]]
+					decoded = decoded .. " " .. loader.idx2word[word_id]
+				else
+					local loss, index = torch.max(predictions[t][1],1)
+					decoded = decoded .. " " .. loader.idx2word[index[1]]
+				end
 				text = text .. " " .. loader.idx2word[y[t][1]]
 				input = input .. " "
 				for ch = 2, x_char[t]:size(2) do
 					local char = loader.idx2char[x_char[t][1][ch]]
-					if char ~= ' ' and char~= '}' then
+					if char~= '}' then
 						input = input .. loader.idx2char[x_char[t][1][ch]]
 					else
 						break
 					end
 				end
+
 			end
 		end
 		if iteration % 10 == 0 then

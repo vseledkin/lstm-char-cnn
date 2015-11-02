@@ -24,22 +24,30 @@ function HLogSoftMax:__init(mapping, input_size)
     --cluster softmax/loss
     self.cluster_model = nn.Sequential()
     self.cluster_model:add(nn.Linear(input_size, self.n_clusters))
-    --self.cluster_model:add(nn.LogSoftMax():annotate{name='cluster_prediction'})
-    self.cluster_model:add(nn.LogSoftMax())
+		local lsm_cluster = nn.LogSoftMax()
+		lsm_cluster.name = 'cluster_prediction'
+		self.cluster_prediction = lsm_cluster
+    self.cluster_model:add(lsm_cluster)
+    --self.cluster_model:add(nn.LogSoftMax())
     self.logLossCluster = nn.ClassNLLCriterion()
 
     --class softmax/loss
     self.class_model = HSMClass.hsm(self.input_size, self.n_clusters, self.n_max_class_in_cluster)
-    local get_layer = function (layer)
-		          if layer.name ~= nil then
-			      if layer.name == 'class_bias' then
-			          self.class_bias = layer
-			      elseif layer.name == 'class_weight' then
-                                  self.class_weight = layer
-                              end
-		          end
-		      end
-    self.class_model:apply(get_layer)
+
+		for _,node in ipairs(self.class_model.forwardnodes) do
+			local name = node.data.annotations.name
+			if name == 'class_prediction' then
+				print('got class_prediction node')
+				self.class_prediction = node.data.module
+			elseif name == 'class_bias' then
+				print('got class_bias node')
+				self.class_bias = node.data.module
+			elseif name == 'class_weight' then
+				print('got class_weight node')
+				self.class_weight = node.data.module
+			end
+		end
+
     self.logLossClass = nn.ClassNLLCriterion()
 
     self:change_bias()

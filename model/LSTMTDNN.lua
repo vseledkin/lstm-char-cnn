@@ -32,14 +32,14 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 		local length = length
 		local inputs = {}
 		if use_chars == 1 then
-				table.insert(inputs, nn.Identity()()) -- batch_size x word length (char indices)
-	char_vec_layer = LookupTable(char_vocab_size, char_vec_size)
-	char_vec_layer.name = 'char_vecs' -- change name so we can refer to it easily later
+			table.insert(inputs, nn.Identity()()) -- batch_size x word length (char indices)
+			char_vec_layer = LookupTable(char_vocab_size, char_vec_size)
+			char_vec_layer.name = 'char_vecs' -- change name so we can refer to it easily later
 		end
 		if use_words == 1 then
-				table.insert(inputs, nn.Identity()()) -- batch_size x 1 (word indices)
-	word_vec_layer = LookupTable(word_vocab_size, word_vec_size)
-	word_vec_layer.name = 'word_vecs' -- change name so we can refer to it easily later
+			table.insert(inputs, nn.Identity()()) -- batch_size x 1 (word indices)
+			word_vec_layer = LookupTable(word_vocab_size, word_vec_size)
+			word_vec_layer.name = 'word_vecs' -- change name so we can refer to it easily later
 		end
 		for L = 1,n do
 			table.insert(inputs, nn.Identity()()) -- prev_c[L]
@@ -58,6 +58,7 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 			char_cnn.name = 'cnn' -- change name so we can refer to it later
 			local cnn_output = char_cnn(char_vec)
 			input_size_L = torch.Tensor(feature_maps):sum()
+			print('TDNN output', input_size_L)
 			if use_words == 1 then
 				word_vec = word_vec_layer(inputs[2])
 				x = nn.JoinTable(2)({cnn_output, word_vec})
@@ -73,6 +74,7 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 					x = nn.BatchNormalization(0)(x)
 			end
 			if highway_layers > 0 then
+				print('HighwayMLP',input_size_L)
 				local highway_mlp = HighwayMLP.mlp(input_size_L, highway_layers)
 				highway_mlp.name = 'highway'
 				x = highway_mlp(x)
@@ -83,6 +85,7 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 			input_size_L = rnn_size
 	end
 	-- evaluate the input sums at once for efficiency
+	print('LSTM layer', L, input_size_L)
 	local i2h = nn.Linear(input_size_L, 4 * rnn_size)(x)
 	local h2h = nn.Linear(rnn_size, 4 * rnn_size)(prev_h)
 	local all_input_sums = nn.CAddTable()({i2h, h2h})
