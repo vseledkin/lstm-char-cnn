@@ -36,13 +36,14 @@ cmd:option('-use_words', 0, 'use words (1=yes)')
 cmd:option('-use_chars', 1, 'use characters (1=yes)')
 cmd:option('-highway_layers', 0, 'number of highway layers')
 cmd:option('-word_vec_size', 0, 'dimensionality of word embeddings')
-cmd:option('-char_vec_size', 16, 'dimensionality of character embeddings')
-cmd:option('-feature_maps', '{50,100,150,200,250,300}', 'number of feature maps in the CNN')
-cmd:option('-kernels', '{1,2,3,4,5,6}', 'conv net kernel widths')
+cmd:option('-char_vec_size', 64, 'dimensionality of character embeddings')
+cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
+cmd:option('-kernels', '{1,2,3,4,5,6,7}', 'conv net kernel widths')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-dropout',0,'dropout. 0 = no dropout')
 -- optimization
 cmd:option('-hsm',-1,'number of clusters to use for hsm. 0 = normal softmax, -1 = use sqrt(|V|)')
+cmd:option('-hsm_simple',1,'number of clusters to use for hsm. 0 = normal softmax, -1 = use sqrt(|V|)')
 cmd:option('-learning_rate',0.001,'starting learning rate')
 cmd:option('-learning_rate_decay',0.5,'learning rate decay')
 cmd:option('-decay_when',1,'decay if validation perplexity does not improve by more than this much')
@@ -161,7 +162,7 @@ end
 
 -- load model objects. we do this here because of cudnn and hsm options
 TDNN = require 'model.TDNN'
-LSTMTDNN = require 'model.LSTMTDNN'
+LSTMTDNN = require 'model.LSTMTDNNNO'
 HighwayMLP = require 'model.HighwayMLP'
 
 -- make sure output directory exists
@@ -185,9 +186,12 @@ else
 				opt.kernels, loader.max_word_l, opt.use_words, opt.use_chars, opt.batch_norm,opt.highway_layers, opt.hsm)
 		-- training criterion (negative log likelihood)
 		if opt.hsm > 0 then
-				protos.criterion = nn.HLogSoftMax(mapping, opt.rnn_size)
+			if opt.hsm_simple  == 1 then
+				print("Use simple HSM")
+			end
+			protos.criterion = nn.HLogSoftMax(mapping, opt.rnn_size, opt.hsm_simple == 1)
 		else
-				protos.criterion = nn.ClassNLLCriterion()
+			protos.criterion = nn.ClassNLLCriterion()
 		end
 end
 
@@ -269,7 +273,7 @@ end
 function eval_split(split_idx, max_batches)
 		print('evaluating loss over split index ' .. split_idx)
 		local n = loader.split_sizes[split_idx]
-		if opt.hsm > 0 then
+		if opt.hsm > 0 and not opt.hsm_simple then
 				protos.criterion:change_bias()
 		end
 
@@ -394,7 +398,12 @@ function feval(x)
 					local cluster_loss, cluster_id = torch.max(clones.criterion[t].cluster_prediction.output[1],1)
 					local class_loss, class_id = torch.max(clones.criterion[t].class_prediction.output[1],1)
 					local word_id = rmapping[cluster_id[1]][class_id[1]]
-					decoded = decoded .. " " .. loader.idx2word[word_id]
+					local word = loader.idx2word[word_id]
+					if word == nil then
+						decoded = decoded .. " NIL!"
+					else
+						decoded = decoded .. " " .. loader.idx2word[word_id]
+					end
 				else
 					local loss, index = torch.max(predictions[t][1],1)
 					decoded = decoded .. " " .. loader.idx2word[index[1]]
